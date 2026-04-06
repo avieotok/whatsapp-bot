@@ -62,4 +62,5 @@ app.post("/webhook", async (req, res) => {
   } catch(e) { console.error(e.message); }
 });
 app.get("/health", (_,res) => res.json({status:"ok"}));
-app.listen(process.env.PORT||3000, () => console.log("Bot running!"));
+app.listen(process.env.PORT||10000, () => console.log("Bot running!")); 
+
