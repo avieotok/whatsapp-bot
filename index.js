@@ -61,6 +61,9 @@ app.post("/webhook", async (req, res) => {
     await handleMessage({ from: msg.from, text: msg.text.body.trim(), messageId: msg.id });
   } catch(e) { console.error(e.message); }
 });
+setInterval(() => {
+  require("https").get("https://whatsapp-bot-l384.onrender.com/health");
+}, 14 * 60 * 1000);
 app.get("/health", (_,res) => res.json({status:"ok"}));
 app.listen(process.env.PORT||10000, () => console.log("Bot running!")); 
 
