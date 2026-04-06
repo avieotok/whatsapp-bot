@@ -1,111 +1,65 @@
 require("dotenv").config();
-
 const express = require("express");
-const { handleMessage, expireTimedOutSessions } = require("./botFlow");
-const store = require("./sessionStore");
-
 const app = express();
 app.use(express.json());
-
-// ════════════════════════════════════════════════════════════
-//  WEBHOOK — Meta verifies this endpoint when you register it
-// ════════════════════════════════════════════════════════════
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-    console.log("[Webhook] ✅ Verified by Meta");
-    return res.status(200).send(challenge);
+const { sendMessage, markAsRead } = require("./whatsapp");
+const { notifyOwner, notifyTelegram } = require("./notify");
+const store = require("./sessionStore");
+const config = require("./questions");
+const OWNER_PHONE = process.env.OWNER_PHONE;
+async function handleMessage({ from, text, messageId }) {
+  await markAsRead(messageId);
+  if (from === OWNER_PHONE) return handleOwnerCommand(text);
+  let session = store.getSession(from);
+  if (!session) {
+    session = store.createSession(from);
+    await sendMessage(from, config.welcomeMessage);
+    await askQuestion(from, session.step);
+    return;
   }
+  if (["done","approved","rejected","timeout"].includes(session.status)) {
+    store.deleteSession(from);
+    session = store.createSession(from);
+    await sendMessage(from, config.welcomeMessage);
+    await askQuestion(from, session.step);
+    return;
+  }
+  const currentQuestion = config.questions[session.step];
+  session = store.updateSession(from, {
+    answers: [...session.answers, { question: currentQuestion, answer: text }],
+    step: session.step + 1,
+  });
+  if (session.step < config.questions.length) { await askQuestion(from, session.step); return; }
+  store.updateSession(from, { status: "done" });
+  await sendMessage(from, config.thankYouMessage);
+  await notifyOwner(store.getSession(from));
+  await notifyTelegram(store.getSession(from));
+}
+async function askQuestion(phone, index) {
+  const q = config.questions[index];
+  if (!q) return;
+  await sendMessage(phone, `שאלה ${index+1}/${config.questions.length}:\n${q}`);
+}
+async function handleOwnerCommand(text) {
+  const n = text.trim();
+  const a = n.match(/^אשר\s+(\S+)/);
+  const r = n.match(/^דחה\s+(\S+)/);
+  if (a) { store.updateSession(a[1], {status:"approved"}); await sendMessage(OWNER_PHONE, `✅ ${a[1]} אושר.`); return; }
+  if (r) { store.updateSession(r[1], {status:"rejected"}); await sendMessage(OWNER_PHONE, `🚫 ${r[1]} נדחה.`); return; }
+  await sendMessage(OWNER_PHONE, `פקודות:\n• אשר <מספר>\n• דחה <מספר>`);
+}
+app.get("/webhook", (req, res) => {
+  if (req.query["hub.mode"]==="subscribe" && req.query["hub.verify_token"]===process.env.WHATSAPP_VERIFY_TOKEN)
+    return res.status(200).send(req.query["hub.challenge"]);
   res.sendStatus(403);
 });
-
-// ════════════════════════════════════════════════════════════
-//  WEBHOOK — Receives incoming WhatsApp messages
-// ════════════════════════════════════════════════════════════
 app.post("/webhook", async (req, res) => {
-  // Always respond 200 immediately so Meta doesn't retry
   res.sendStatus(200);
-
   try {
-    const entry = req.body?.entry?.[0];
-    const changes = entry?.changes?.[0];
-    const value = changes?.value;
-
-    // Ignore status updates (message delivered / read receipts)
-    if (!value?.messages) return;
-
-    const message = value.messages[0];
-    const from = message.from; // sender's phone number
-
-    // Only handle text messages for now
-    if (message.type !== "text") {
-      console.log(`[Webhook] Skipping non-text message from ${from} (type: ${message.type})`);
-      return;
-    }
-
-    const text = message.text.body.trim();
-    const messageId = message.id;
-
-    console.log(`[Webhook] 📩 Message from ${from}: "${text}"`);
-
-    await handleMessage({ from, text, messageId });
-
-  } catch (err) {
-    console.error("[Webhook] ❌ Error processing message:", err.message);
-  }
+    const msg = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    if (!msg || msg.type!=="text") return;
+    await handleMessage({ from: msg.from, text: msg.text.body.trim(), messageId: msg.id });
+  } catch(e) { console.error(e.message); }
 });
-
-// ════════════════════════════════════════════════════════════
-//  ADMIN API — simple REST endpoints for the dashboard
-// ════════════════════════════════════════════════════════════
-
-// List all sessions
-app.get("/admin/sessions", (req, res) => {
-  res.json(store.getAllSessions());
-});
-
-// Get pending sessions (completed screening, waiting for owner decision)
-app.get("/admin/pending", (req, res) => {
-  const pending = store.getAllSessions().filter((s) => s.status === "done");
-  res.json(pending);
-});
-
-// Approve a contact
-app.post("/admin/approve/:phone", async (req, res) => {
-  const { phone } = req.params;
-  store.updateSession(phone, { status: "approved" });
-  res.json({ ok: true, phone, status: "approved" });
-});
-
-// Reject a contact
-app.post("/admin/reject/:phone", async (req, res) => {
-  const { phone } = req.params;
-  store.updateSession(phone, { status: "rejected" });
-  res.json({ ok: true, phone, status: "rejected" });
-});
-
-// Health check
-app.get("/health", (_, res) => res.json({ status: "ok", uptime: process.uptime() }));
-
-// ════════════════════════════════════════════════════════════
-//  BACKGROUND: expire timed-out sessions every hour
-// ════════════════════════════════════════════════════════════
-setInterval(expireTimedOutSessions, 60 * 60 * 1000);
-
-// ════════════════════════════════════════════════════════════
-//  START
-// ════════════════════════════════════════════════════════════
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`
-╔═══════════════════════════════════════════╗
-║   WhatsApp Screening Bot — Running        ║
-║   Port: ${PORT}                              ║
-║   Webhook: POST /webhook                  ║
-║   Admin:   GET  /admin/pending            ║
-╚═══════════════════════════════════════════╝
-  `);
-});
+app.get("/health", (_,res) => res.json({status:"ok"}));
+app.listen(process.env.PORT||3000, () => console.log("Bot running!"));
