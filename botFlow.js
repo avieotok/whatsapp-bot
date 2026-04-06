@@ -1,7 +1,7 @@
 const { sendMessage, markAsRead } = require("./whatsapp");
 const { notifyOwner, notifyTelegram } = require("./notify");
 const store = require("./sessionStore");
-const config = require("../config/questions");
+const config = require("./questions");ף
 
 const OWNER_PHONE = process.env.OWNER_PHONE;
 
