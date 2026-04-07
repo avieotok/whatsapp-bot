@@ -65,5 +65,6 @@ setInterval(() => {
   require("https").get("https://whatsapp-bot-l384.onrender.com/health");
 }, 14 * 60 * 1000);
 app.get("/health", (_,res) => res.json({status:"ok"}));
+require("./telegram-bot");
 app.listen(process.env.PORT||10000, () => console.log("Bot running!")); 
 
