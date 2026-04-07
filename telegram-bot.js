@@ -31,4 +31,20 @@ bot.on("message", async (msg) => {
     store.deleteSession(chatId);
     session = store.createSession(chatId);
     bot.sendMessage(chatId, config.welcomeMessage);
-    bot.sendMessage(chatId, `שאלה 1/${config.questions.length}:\n${config.questions[0]
+    bot.sendMessage(chatId, `1 מתוך ${config.questions.length}:\n${config.questions[0]}`);
+    return;
+  }
+
+  const currentIndex = session.answers.length;
+  session.answers.push(text);
+  store.updateSession(chatId, { answers: session.answers });
+
+  if (currentIndex + 1 < config.questions.length) {
+    bot.sendMessage(chatId, `${currentIndex + 2} מתוך ${config.questions.length}:\n${config.questions[currentIndex + 1]}`);
+  } else {
+    store.updateSession(chatId, { status: "done" });
+    bot.sendMessage(chatId, "תודה! תשובותיך התקבלו ✅");
+    const summary = session.answers.map((a, i) => `${config.questions[i]}\n➡️ ${a}`).join("\n\n");
+    bot.sendMessage(OWNER_ID, `📋 משתמש חדש: ${chatId}\n\n${summary}`);
+  }
+});
